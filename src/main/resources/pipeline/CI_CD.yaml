@@ -1,0 +1,77 @@
+trigger:
+  - main 
+
+pool: "reto"
+
+variables:
+  - group: reto
+
+stages:
+  - stage: Build
+    displayName: "Build & Test"
+    jobs:
+      - job: Build
+        displayName: "Compilar y Ejecutar Pruebas"
+        steps:
+          - task: Maven@3
+            displayName: 'Ejecutar Pruebas Unitarias'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'test'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+
+          - task: Maven@3
+            displayName: "Compilar con Maven"
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'clean package'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+
+          - script: |
+              echo "Pruebas ejecutadas exitosamente"
+            displayName: "Verificar pruebas"
+
+          - task: CopyFiles@2
+            displayName: "Copiar el JAR compilado"
+            inputs:
+              SourceFolder: '$(Build.SourcesDirectory)/target'
+              Contents: '**/*.jar'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publicar Artefacto"
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'lambda-jar'
+
+  - stage: Deploy
+    displayName: "Desplegar en AWS Lambda"
+    dependsOn: Build
+    condition: succeeded('Build')
+    jobs:
+      - job: DeployLambda
+        displayName: "Subir JAR a AWS Lambda"
+        steps:
+        - task: DownloadBuildArtifacts@0
+          displayName: 'Descargar Artefacto'
+          inputs:
+            buildType: 'current'
+            downloadType: 'single'
+            artifactName: 'lambda-jar'
+            downloadPath: '$(Pipeline.Workspace)/'
+
+        - script: |
+            echo "Configurando credenciales de AWS..."
+            aws configure set aws_access_key_id $(AWS_ACCESS_KEY_ID)
+            aws configure set aws_secret_access_key $(AWS_SECRET_ACCESS_KEY)
+            aws configure set region $(AWS_REGION)
+          displayName: "Configurar AWS CLI"
+
+        - script: |
+            echo "Actualizando función AWS Lambda..."
+            aws lambda update-function-code \
+              --function-name $(FUNCTION_NAME) \
+              --zip-file fileb://$(Pipeline.Workspace)/lambda-jar/developer-detector-1.0-SNAPSHOT-jar-with-dependencies.jar
+          displayName: "Actualizar AWS Lambda con el nuevo JAR"
